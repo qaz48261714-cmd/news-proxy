@@ -6,21 +6,26 @@ const app = express();
 const parser = new Parser();
 app.use(cors());
 
-const AV_KEY = process.env.AV_KEY || 'YOUR_API_KEY_HERE';
-
 const rssFeed = {
   cnyes: 'https://feeds.feedburner.com/cnyes',
   econ:  'https://money.udn.com/rssfeed/news/1001/5588?ch=money',
   ctee:  'https://www.ctee.com.tw/feed',
 };
 
+// Yahoo Finance 標的對照表
 const symbols = {
-  tsmc: 'TSM',
-  btc:  'BTC',
-  gold: 'XAU',
-  spx:  'SPY',
-  usd:  'UUP',
-  oil:  'USO',
+  tsmc: '2330.TW',   // 台積電（台股）
+  btc:  'BTC-USD',   // 比特幣
+  gold: 'GC=F',      // 黃金期貨
+  spx:  '^GSPC',     // S&P 500 指數
+  usd:  'DX-Y.NYB',  // 美元指數
+  oil:  'CL=F',      // 原油期貨
+};
+
+// 幣種對照
+const currencies = {
+  tsmc: 'TWD', btc: 'USD', gold: 'USD',
+  spx: 'USD', usd: 'USD', oil: 'USD',
 };
 
 app.get('/news/:source', async (req, res) => {
@@ -41,18 +46,24 @@ app.get('/price/:asset', async (req, res) => {
   if (!sym) return res.status(404).json({ error: '標的不存在' });
   try {
     const fetch = (await import('node-fetch')).default;
-    const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${sym}&apikey=${AV_KEY}`;
-    const data = await (await fetch(url)).json();
-    const q = data['Global Quote'];
-    if (!q || !q['05. price']) return res.status(500).json({ error: 'API 無回應' });
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1d`;
+    const headers = { 'User-Agent': 'Mozilla/5.0' };
+    const data = await (await fetch(url, { headers })).json();
+    const meta = data.chart.result[0].meta;
+    const price  = meta.regularMarketPrice;
+    const open   = meta.chartPreviousClose || meta.regularMarketOpen;
+    const high   = meta.regularMarketDayHigh;
+    const low    = meta.regularMarketDayLow;
+    const change = price - open;
     res.json({
-      symbol:    sym,
-      price:     parseFloat(q['05. price']),
-      open:      parseFloat(q['02. open']),
-      high:      parseFloat(q['03. high']),
-      low:       parseFloat(q['04. low']),
-      change:    parseFloat(q['09. change']),
-      changePct: q['10. change percent'],
+      symbol: sym,
+      price,
+      open,
+      high,
+      low,
+      change,
+      changePct: ((change / open) * 100).toFixed(2) + '%',
+      currency: currencies[req.params.asset] || 'USD',
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -64,20 +75,23 @@ app.get('/intraday/:asset', async (req, res) => {
   if (!sym) return res.status(404).json({ error: '標的不存在' });
   try {
     const fetch = (await import('node-fetch')).default;
-    const url = `https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol=${sym}&interval=5min&apikey=${AV_KEY}`;
-    const data = await (await fetch(url)).json();
-    const series = data['Time Series (5min)'];
-    if (!series) return res.status(500).json({ error: 'API 無回應' });
-    const points = Object.entries(series).slice(0, 60).reverse().map(([t, v]) => ({
-      time: t, price: parseFloat(v['4. close'])
-    }));
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=5m&range=1d`;
+    const headers = { 'User-Agent': 'Mozilla/5.0' };
+    const data = await (await fetch(url, { headers })).json();
+    const result = data.chart.result[0];
+    const times  = result.timestamp;
+    const closes = result.indicators.quote[0].close;
+    const points = times.map((t, i) => ({
+      time:  new Date(t * 1000).toISOString(),
+      price: closes[i] || null,
+    })).filter(p => p.price !== null);
     res.json(points);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-app.get('/', (req, res) => res.send('財經 Proxy 伺服器運行中'));
+app.get('/', (req, res) => res.send('財經 Proxy 伺服器運行中（Yahoo Finance）'));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`伺服器啟動於 port ${PORT}`));
