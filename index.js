@@ -82,11 +82,14 @@ app.get('/intraday/:asset', async (req, res) => {
     const data = await (await fetch(url, { headers })).json();
     const result = data.chart.result[0];
     const times  = result.timestamp;
-    const closes = result.indicators.quote[0].close;
+    const q      = result.indicators.quote[0];
     const points = times.map((t, i) => ({
       time:  new Date(t * 1000).toISOString(),
-      price: closes[i] || null,
-    })).filter(p => p.price !== null);
+      open:  q.open[i]  ? parseFloat(q.open[i].toFixed(4))  : null,
+      high:  q.high[i]  ? parseFloat(q.high[i].toFixed(4))  : null,
+      low:   q.low[i]   ? parseFloat(q.low[i].toFixed(4))   : null,
+      close: q.close[i] ? parseFloat(q.close[i].toFixed(4)) : null,
+    })).filter(p => p.open && p.high && p.low && p.close);
     res.json(points);
   } catch (e) {
     res.status(500).json({ error: e.message });

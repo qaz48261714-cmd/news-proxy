@@ -153,10 +153,13 @@ input[type=range]{flex:1;accent-color:#00ff88;height:3px;}
     </div>
     <div style="position:relative;width:100%;height:180px;"><canvas id="priceChart"></canvas></div>
     <div class="chart-leg">
-      <div class="cl"><span class="cll" style="background:#00ff88;"></span>PRICE</div>
-      <div class="cl"><span class="cll" style="background:#ff3355;"></span>UPPER</div>
-      <div class="cl"><span class="cll" style="background:#00aaff;"></span>LOWER</div>
-    </div>
+  <div class="cl"><span style="display:inline-block;width:10px;height:10px;background:#ff3355;margin-right:3px;"></span>漲</div>
+  <div class="cl"><span style="display:inline-block;width:10px;height:10px;background:#00ff88;margin-right:3px;"></span>跌</div>
+  <div class="cl"><span class="cll" style="background:#ffd700;"></span>MA7</div>
+  <div class="cl"><span class="cll" style="background:#cd853f;"></span>MA14</div>
+  <div class="cl"><span class="cll" style="background:#ff69b4;"></span>MA30</div>
+  <div class="cl"><span class="cll" style="background:#aa66ff;"></span>MA90</div>
+</div>
   </div>
 </div>
 <div id="main-news" class="panel">
@@ -183,6 +186,9 @@ input[type=range]{flex:1;accent-color:#00ff88;height:3px;}
   <button class="rfbtn" onclick="fetchAll()">↺ REFRESH</button>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.1.1/dist/chartjs-chart-financial.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1/dist/chartjs-adapter-luxon.umd.min.js"></script>
 <script>
 const API='https://news-proxy-1c5n.onrender.com';
 const ASSETS=[
@@ -242,22 +248,134 @@ async function loadChart(id){const h=await tf(`${API}/intraday/${id}`);if(h&&Arr
 function updThresh(v){thr=parseFloat(v);document.getElementById('tval').textContent=thr.toFixed(1)+'%';chkAlerts();renderGrid();updLines();}
 function setRange(r,btn){rng=r;document.querySelectorAll('.rb').forEach(b=>b.classList.remove('active'));btn.classList.add('active');buildChart();}
 function buildChart(){
-  const a=ASSETS.find(x=>x.id===sel);const d=ld[sel];const h=hist[sel+'_1D'];
-  let labels,prices;
-  if(h&&h.length){labels=h.map(p=>{const t=new Date(p.time);return t.getHours().toString().padStart(2,'0')+':'+t.getMinutes().toString().padStart(2,'0');});prices=h.map(p=>parseFloat(Number(p.price).toFixed(a.dec)));}
-  else if(d){const n=20;labels=Array.from({length:n},(_,i)=>`${9+Math.floor(i*.5)}:${String((i*30)%60).padStart(2,'0')}`);prices=Array.from({length:n},(_,i)=>{const t=i/(n-1);return parseFloat((d.open+(d.price-d.open)*t+(Math.random()-.5)*Math.abs(d.high-d.low)*.2).toFixed(a.dec));});}
-  else return;
-  const op=d?d.open:prices[0];
-  const upper=prices.map(()=>parseFloat((op*(1+thr/100)).toFixed(a.dec)));
-  const lower=prices.map(()=>parseFloat((op*(1-thr/100)).toFixed(a.dec)));
-  const sw=d?swg(sel):0;
-  document.getElementById('ct').textContent=`${a.name} / ${a.sym}`;
-  document.getElementById('cs-sw').textContent=sw.toFixed(2)+'%';
-  document.getElementById('cs-sw').style.color=sw>=thr?'#ff3355':'#00ff88';
-  if(d){document.getElementById('cs-hi').textContent=fmt(d.high,a.dec);document.getElementById('cs-lo').textContent=fmt(d.low,a.dec);}
-  if(ch)ch.destroy();
-  Chart.defaults.color='#4a6080';
-  ch=new Chart(document.getElementById('priceChart'),{type:'line',data:{labels,datasets:[{label:'PRICE',data:prices,borderColor:'#00ff88',borderWidth:1.5,pointRadius:0,tension:0.3,fill:false},{label:'UPPER',data:upper,borderColor:'#ff3355',borderWidth:1,borderDash:[4,3],pointRadius:0,fill:false},{label:'LOWER',data:lower,borderColor:'#00aaff',borderWidth:1,borderDash:[4,3],pointRadius:0,fill:false}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},plugins:{legend:{display:false},tooltip:{backgroundColor:'#0d1520',borderColor:'#1a2e45',borderWidth:1,titleColor:'#4a6080',bodyColor:'#c8e0f0'}},scales:{x:{ticks:{maxTicksLimit:6,color:'#4a6080',font:{family:'Share Tech Mono',size:10}},grid:{color:'rgba(26,46,69,.4)'},border:{color:'#1a2e45'}},y:{ticks:{color:'#4a6080',font:{family:'Share Tech Mono',size:10},callback:v=>fmt(v,a.dec)},grid:{color:'rgba(26,46,69,.4)'},border:{color:'#1a2e45'}}}}});
+  const a=ASSETS.find(x=>x.id===sel);
+  const d=ld[sel];
+  const h=hist[sel+'_1D'];
+  if(ch){ch.destroy();ch=null;}
+
+  // 計算 MA
+  function calcMA(data, period){
+    return data.map((_, i) => {
+      if(i < period-1) return null;
+      const slice = data.slice(i-period+1, i+1);
+      return parseFloat((slice.reduce((s,v)=>s+v,0)/period).toFixed(a.dec));
+    });
+  }
+
+  if(h && h.length >= 2){
+    // 真實 K 棒資料
+    const labels = h.map(p => new Date(p.time));
+    const closes = h.map(p => p.close);
+    const ohlc   = h.map(p => ({
+      x: new Date(p.time),
+      o: p.open, h: p.high, l: p.low, c: p.close
+    }));
+
+    const ma7  = calcMA(closes, 7);
+    const ma14 = calcMA(closes, 14);
+    const ma30 = calcMA(closes, 30);
+    const ma90 = calcMA(closes, 90);
+
+    const sw = d ? swg(sel) : 0;
+    document.getElementById('ct').textContent=`${a.name} / ${a.sym}`;
+    document.getElementById('cs-sw').textContent=sw.toFixed(2)+'%';
+    document.getElementById('cs-sw').style.color=sw>=thr?'#ff3355':'#00ff88';
+    if(d){
+      document.getElementById('cs-hi').textContent=fmt(d.high,a.dec);
+      document.getElementById('cs-lo').textContent=fmt(d.low,a.dec);
+    }
+
+    ch = new Chart(document.getElementById('priceChart'), {
+      data: {
+        datasets: [
+          {
+            type: 'candlestick',
+            label: 'K棒',
+            data: ohlc,
+            color: {
+              up:   '#ff3355',  // 上漲紅
+              down: '#00ff88',  // 下跌綠
+              unchanged: '#888888',
+            },
+            borderColor: {
+              up:   '#ff3355',
+              down: '#00ff88',
+              unchanged: '#888888',
+            },
+          },
+          {
+            type: 'line', label: 'MA7',
+            data: labels.map((x,i)=>({x,y:ma7[i]})),
+            borderColor:'#ffd700', borderWidth:1.2, pointRadius:0, tension:0.3, fill:false,
+            spanGaps:true,
+          },
+          {
+            type: 'line', label: 'MA14',
+            data: labels.map((x,i)=>({x,y:ma14[i]})),
+            borderColor:'#cd853f', borderWidth:1.2, pointRadius:0, tension:0.3, fill:false,
+            spanGaps:true,
+          },
+          {
+            type: 'line', label: 'MA30',
+            data: labels.map((x,i)=>({x,y:ma30[i]})),
+            borderColor:'#ff69b4', borderWidth:1.2, pointRadius:0, tension:0.3, fill:false,
+            spanGaps:true,
+          },
+          {
+            type: 'line', label: 'MA90',
+            data: labels.map((x,i)=>({x,y:ma90[i]})),
+            borderColor:'#aa66ff', borderWidth:1.2, pointRadius:0, tension:0.3, fill:false,
+            spanGaps:true,
+          },
+        ]
+      },
+      options:{
+        responsive:true, maintainAspectRatio:false,
+        interaction:{mode:'index', intersect:false},
+        plugins:{
+          legend:{display:false},
+          tooltip:{
+            backgroundColor:'#0d1520', borderColor:'#1a2e45', borderWidth:1,
+            titleColor:'#4a6080', bodyColor:'#c8e0f0',
+            callbacks:{
+              label: ctx => {
+                if(ctx.dataset.type==='candlestick'){
+                  const r=ctx.raw;
+                  return [`O:${fmt(r.o,a.dec)} H:${fmt(r.h,a.dec)} L:${fmt(r.l,a.dec)} C:${fmt(r.c,a.dec)}`];
+                }
+                return ctx.raw.y ? `${ctx.dataset.label}: ${fmt(ctx.raw.y,a.dec)}` : null;
+              }
+            }
+          }
+        },
+        scales:{
+          x:{
+            type:'time',
+            time:{ unit:'hour', displayFormats:{ hour:'HH:mm' } },
+            ticks:{color:'#4a6080', font:{family:'Share Tech Mono',size:10}, maxTicksLimit:6},
+            grid:{color:'rgba(26,46,69,.4)'}, border:{color:'#1a2e45'}
+          },
+          y:{
+            ticks:{color:'#4a6080', font:{family:'Share Tech Mono',size:10}, callback:v=>fmt(v,a.dec)},
+            grid:{color:'rgba(26,46,69,.4)'}, border:{color:'#1a2e45'}
+          }
+        }
+      }
+    });
+
+  } else if(d) {
+    // 沒有 K 棒資料時用模擬折線
+    const n=20;
+    const labels=Array.from({length:n},(_,i)=>new Date(Date.now()-(n-i)*5*60000));
+    const prices=Array.from({length:n},(_,i)=>{const t=i/(n-1);return parseFloat((d.open+(d.price-d.open)*t+(Math.random()-.5)*Math.abs(d.high-d.low)*.2).toFixed(a.dec));});
+    const ma7=calcMA(prices,7);const ma14=calcMA(prices,14);const ma30=calcMA(prices,30);
+    ch=new Chart(document.getElementById('priceChart'),{type:'line',data:{labels,datasets:[
+      {label:'PRICE',data:prices,borderColor:'#00ff88',borderWidth:1.5,pointRadius:0,tension:0.3,fill:false},
+      {label:'MA7', data:ma7,  borderColor:'#ffd700', borderWidth:1, pointRadius:0, tension:0.3, fill:false, spanGaps:true},
+      {label:'MA14',data:ma14, borderColor:'#cd853f', borderWidth:1, pointRadius:0, tension:0.3, fill:false, spanGaps:true},
+      {label:'MA30',data:ma30, borderColor:'#ff69b4', borderWidth:1, pointRadius:0, tension:0.3, fill:false, spanGaps:true},
+    ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{backgroundColor:'#0d1520',borderColor:'#1a2e45',borderWidth:1,titleColor:'#4a6080',bodyColor:'#c8e0f0'}},scales:{x:{type:'time',ticks:{color:'#4a6080',font:{size:10}},grid:{color:'rgba(26,46,69,.4)'}},y:{ticks:{color:'#4a6080',font:{size:10},callback:v=>fmt(v,a.dec)},grid:{color:'rgba(26,46,69,.4)'}}}}});
+  }
 }
 function updLines(){if(!ch)return;const a=ASSETS.find(x=>x.id===sel);const d=ld[sel];if(!d)return;ch.data.datasets[1].data=ch.data.datasets[1].data.map(()=>parseFloat((d.open*(1+thr/100)).toFixed(a.dec)));ch.data.datasets[2].data=ch.data.datasets[2].data.map(()=>parseFloat((d.open*(1-thr/100)).toFixed(a.dec)));ch.update('none');}
 function fallback(){const fb={tsmc:{price:2250,open:2250,high:2285,low:2240,change:0},btc:{price:93500,open:91800,high:94200,low:91200,change:1700},gold:{price:3312,open:3298,high:3325,low:3290,change:14},spx:{price:5620,open:5598,high:5641,low:5585,change:22},usd:{price:104.2,open:104.5,high:104.8,low:104.0,change:-0.3},oil:{price:79.4,open:79.8,high:80.2,low:78.9,change:-0.4}};ASSETS.forEach(a=>{ld[a.id]=fb[a.id];});}
