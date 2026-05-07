@@ -1,3 +1,4 @@
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const Parser = require('rss-parser');
@@ -5,6 +6,7 @@ const Parser = require('rss-parser');
 const app = express();
 const parser = new Parser();
 app.use(cors());
+app.use(express.static(path.join(__dirname, 'public')));
 
 const rssFeed = {
   cnyes: 'https://feeds.feedburner.com/cnyes',
